@@ -375,15 +375,23 @@ def hash_to_int(hash_bytes):
     return int.from_bytes(hash_bytes, byteorder="big")
 
 
-def mine_nonce_range(prefix, target, start_nonce, nonce_step, stop_event, result_queue):
+def mine_nonce_range(prefix, target, start_nonce, nonce_step, stop_event, result_queue, progress_queue):
     nonce = start_nonce
+    hashes = 0
+    report_time = time.time()
     while nonce < 0x100000000 and not stop_event.is_set():
         header = prefix + struct.pack("<I", nonce)
         result = double_sha256(header)
+        hashes += 1
         if int.from_bytes(result[::-1], "big") <= target:
             result_queue.put((nonce, result))
             stop_event.set()
             return
+        now = time.time()
+        if now - report_time >= 1.0:
+            progress_queue.put(hashes)
+            hashes = 0
+            report_time = now
         nonce += nonce_step
 
 
@@ -452,6 +460,19 @@ def authorize(client, username, password):
     return response["result"]
 
 
+def suggest_difficulty(client, difficulty):
+    client.send({"id": 3, "method": "mining.suggest_difficulty", "params": [difficulty]})
+    try:
+        response = client.receive_until(lambda msg: msg.get("id") == 3, timeout=3.0)
+    except TimeoutError:
+        log_debug("Pool did not respond to difficulty suggestion")
+        return
+    if response.get("error"):
+        log_debug(f"Pool ignored difficulty suggestion: {response['error']}")
+    else:
+        log_info(f"Suggested pool difficulty: {difficulty}")
+
+
 def submit_share(client, username, job_id, extranonce2, ntime, nonce):
     params = [username, job_id, extranonce2.hex(), ntime, struct.pack("<I", nonce).hex()]
     client.send({"id": 4, "method": "mining.submit", "params": params})
@@ -470,6 +491,7 @@ def mine_job(client, job, extranonce1, extranonce2_size, share_diff, min_diff, m
 
         stop_event = threading.Event()
         result_queue = queue.Queue()
+        progress_queue = queue.Queue()
         with ThreadPoolExecutor(max_workers=mining_threads) as executor:
             futures = [
                 executor.submit(
@@ -480,10 +502,20 @@ def mine_job(client, job, extranonce1, extranonce2_size, share_diff, min_diff, m
                     mining_threads,
                     stop_event,
                     result_queue,
+                    progress_queue,
                 )
                 for thread_id in range(mining_threads)
             ]
             while True:
+                hashes = 0
+                while True:
+                    try:
+                        hashes += progress_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                if hashes:
+                    update_state(hashrate=hashes, target=f"0x{target:064x}", difficulty=difficulty)
+                    print_status(f"Hashrate: {hashes:,.0f} H/s | Target: 0x{target:064x}")
                 try:
                     nonce, result = result_queue.get_nowait()
                 except queue.Empty:
@@ -538,6 +570,7 @@ def run_stratum(config):
 
             authorize(client, username, config.get("password", "x"))
             update_state(status="authorized")
+            suggest_difficulty(client, config.get("suggested_diff", config.get("min_diff", 1.0)))
 
             print(f"Subscribed. extranonce1={extranonce1}, size={extranonce2_size}")
             current_job = None

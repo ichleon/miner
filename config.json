@@ -4,9 +4,10 @@
     "pool_port": 3333,
     "wallet_address": "14Va6X4inm5gpZuB8XzqZBuXJAwryAHHpz",
     "worker_name": "VS-miner",
-    "user_name": "14Va6X4inm5gpZuB8XzqZBuXJAwryAHHpz.PythonMiner",
+    "user_name": "14Va6X4inm5gpZuB8XzqZBuXJAwryAHHpz.VS-miner",
     "password": "x",
     "min_diff": 2,
-    "mining_threads": 100,
+    "suggested_diff": 2,
+    "mining_threads": 4,
     "dashboard_port": 8080
 }
