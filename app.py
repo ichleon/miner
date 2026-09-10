@@ -3,6 +3,7 @@ import hashlib
 import http.client
 import json
 import os
+import queue
 import select
 import socket
 import struct
@@ -11,6 +12,7 @@ import time
 import errno
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_TARGET = 0xFFFF * 2**208
@@ -225,6 +227,11 @@ def load_config():
         float,
         1.0,
     )
+    mining_threads = get_input(
+        "Mining threads (default 1): ",
+        int,
+        1,
+    )
 
     if not wallet_address:
         raise ValueError("A Bitcoin receiving address is required.")
@@ -235,6 +242,8 @@ def load_config():
         )
     if not worker_name:
         worker_name = "PythonMiner"
+    if mining_threads < 1:
+        raise ValueError("Mining threads must be at least 1.")
 
     # Power Mining expects <BTC address>.<worker name> as the Stratum username.
     username = f"{wallet_address}.{worker_name}"
@@ -248,6 +257,7 @@ def load_config():
         "user_name": username,
         "password": password,
         "min_diff": min_diff,
+        "mining_threads": mining_threads,
         "dashboard_port": dashboard_port,
     }
 
@@ -365,6 +375,18 @@ def hash_to_int(hash_bytes):
     return int.from_bytes(hash_bytes, byteorder="big")
 
 
+def mine_nonce_range(prefix, target, start_nonce, nonce_step, stop_event, result_queue):
+    nonce = start_nonce
+    while nonce < 0x100000000 and not stop_event.is_set():
+        header = prefix + struct.pack("<I", nonce)
+        result = double_sha256(header)
+        if int.from_bytes(result[::-1], "big") <= target:
+            result_queue.put((nonce, result))
+            stop_event.set()
+            return
+        nonce += nonce_step
+
+
 class StratumClient:
     def __init__(self, sock):
         self.sock = sock
@@ -437,55 +459,55 @@ def submit_share(client, username, job_id, extranonce2, ntime, nonce):
     return response
 
 
-def mine_job(client, job, extranonce1, extranonce2_size, share_diff, min_diff):
+def mine_job(client, job, extranonce1, extranonce2_size, share_diff, min_diff, mining_threads=1):
     difficulty = max(share_diff, min_diff)
     target = difficulty_to_target(difficulty)
-    extranonce1_bytes = bytes.fromhex(extranonce1)
-    job_header_data = None
+    mining_threads = max(1, int(mining_threads))
 
     for extranonce2_counter in range(1 << (8 * extranonce2_size)):
         extranonce2 = struct.pack("<Q", extranonce2_counter)[:extranonce2_size]
         prefix = header_prefix(job, extranonce1, extranonce2)
 
-        nonce = 0
-        hashes = 0
-        report_time = time.time()
-        while nonce < 0x100000000:
-            if nonce % 4096 == 0:
+        stop_event = threading.Event()
+        result_queue = queue.Queue()
+        with ThreadPoolExecutor(max_workers=mining_threads) as executor:
+            futures = [
+                executor.submit(
+                    mine_nonce_range,
+                    prefix,
+                    target,
+                    thread_id,
+                    mining_threads,
+                    stop_event,
+                    result_queue,
+                )
+                for thread_id in range(mining_threads)
+            ]
+            while True:
                 try:
-                    messages = client.receive(timeout=0)
+                    nonce, result = result_queue.get_nowait()
+                except queue.Empty:
+                    nonce = None
+                if nonce is not None:
+                    stop_event.set()
+                    log_success(f"Valid share found for job {job['job_id']} nonce={nonce} target={hex(target)}")
+                    return ("share", job["job_id"], extranonce2, job["ntime"], nonce, result)
+                if all(future.done() for future in futures):
+                    break
+                try:
+                    messages = client.receive(timeout=0.1)
                 except ConnectionResetError:
+                    stop_event.set()
                     raise
-                except OSError as e:
-                    if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, 10035):
-                        messages = []
-                    else:
-                        raise
                 for message in messages:
                     if message.get("method") == "mining.set_difficulty":
+                        stop_event.set()
                         return ("update_difficulty", float(message["params"][0]), message)
                     if message.get("method") == "mining.notify":
+                        stop_event.set()
                         log_info("Received new job notification")
                         return ("new_job", parse_notify(message["params"]), message)
 
-            header = prefix + struct.pack("<I", nonce)
-            result = double_sha256(header)
-            hash_int = int.from_bytes(result[::-1], "big")
-            hashes += 1
-
-            now = time.time()
-            if now - report_time >= 1.0:
-                current_rate = hashes / (now - report_time)
-                update_state(hashrate=current_rate, target=f"0x{target:064x}", difficulty=difficulty)
-                print_status(f"Hashrate: {current_rate:,.0f} H/s | Target: 0x{target:064x}")
-                hashes = 0
-                report_time = now
-
-            if hash_int <= target:
-                log_success(f"Valid share found for job {job['job_id']} nonce={nonce} target={hex(target)}")
-                return ("share", job["job_id"], extranonce2, job["ntime"], nonce, result)
-
-            nonce += 1
 
     return None
 
@@ -535,7 +557,15 @@ def run_stratum(config):
                             log_info(f"Pool difficulty updated: {pool_diff}")
                     continue
 
-                outcome = mine_job(client, current_job, extranonce1, extranonce2_size, pool_diff, config.get("min_diff", 1.0))
+                outcome = mine_job(
+                    client,
+                    current_job,
+                    extranonce1,
+                    extranonce2_size,
+                    pool_diff,
+                    config.get("min_diff", 1.0),
+                    config.get("mining_threads", 1),
+                )
                 if outcome is None:
                     continue
 

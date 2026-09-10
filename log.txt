@@ -1,0 +1,17 @@
+[2026-09-10 15:49:04] [INFO] Loaded config.json
+[2026-09-10 15:49:04] [INFO] Dashboard listening on 0.0.0.0:8080
+[2026-09-10 15:49:04] [INFO] Connecting to pool pool.powermining.io:3333
+[2026-09-10 15:49:04] [SUCCESS] Subscription accepted
+[2026-09-10 15:49:04] [SUCCESS] Authorization accepted
+[2026-09-10 15:49:04] [INFO] Pool difficulty updated: 100000.0
+[2026-09-10 15:49:04] [INFO] New job received: 3fbae2
+[2026-09-10 15:49:31] [INFO] Received new job notification
+[2026-09-10 15:49:31] [INFO] Job updated during mining: 3fbe9c
+[2026-09-10 15:49:54] [INFO] Received new job notification
+[2026-09-10 15:49:54] [INFO] Job updated during mining: 3fc252
+[2026-09-10 15:50:31] [INFO] Received new job notification
+[2026-09-10 15:50:31] [INFO] Job updated during mining: 3fc61b
+[2026-09-10 15:50:54] [INFO] Received new job notification
+[2026-09-10 15:50:54] [INFO] Job updated during mining: 3fc9d1
+[2026-09-10 15:51:31] [INFO] Received new job notification
+[2026-09-10 15:51:31] [INFO] Job updated during mining: 3fcd89
