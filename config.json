@@ -6,6 +6,6 @@
     "worker_name": "VS-miner",
     "user_name": "14Va6X4inm5gpZuB8XzqZBuXJAwryAHHpz.PythonMiner",
     "password": "x",
-    "min_diff": 0.1,
+    "min_diff": 2,
     "dashboard_port": 8080
 }
