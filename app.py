@@ -461,16 +461,15 @@ def authorize(client, username, password):
 
 
 def suggest_difficulty(client, difficulty):
+    """Suggest a share difficulty without blocking for an optional response.
+
+    Many Stratum pools treat mining.suggest_difficulty as a notification and
+    do not send a response. Waiting for request id 3 can therefore delay the
+    miner and, more importantly, consume a mining.notify message while
+    waiting for that response.
+    """
     client.send({"id": 3, "method": "mining.suggest_difficulty", "params": [difficulty]})
-    try:
-        response = client.receive_until(lambda msg: msg.get("id") == 3, timeout=3.0)
-    except TimeoutError:
-        log_debug("Pool did not respond to difficulty suggestion")
-        return
-    if response.get("error"):
-        log_debug(f"Pool ignored difficulty suggestion: {response['error']}")
-    else:
-        log_info(f"Suggested pool difficulty: {difficulty}")
+    log_info(f"Difficulty suggestion sent to pool: {difficulty}")
 
 
 def submit_share(client, username, job_id, extranonce2, ntime, nonce):
